@@ -1,0 +1,11 @@
+flask
+Flask-API
+numpy
+scipy
+sklearn
+pandas
+terminal
+blessings
+torch
+pprint
+nose
