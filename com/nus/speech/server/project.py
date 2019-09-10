@@ -12,6 +12,7 @@ class Project(object):
 
     def __init__(self):
         print("init project")
+        self.step = 30
         self.Tsim = 10
         self.device = 'cpu'
         model = sMLP(self.Tsim)
@@ -34,6 +35,8 @@ class Project(object):
         self.spiking_02 = np.full((10, 1000), 0)
         self.spiking_03 = np.full((10, 1000), 0)
         self.y_pred = np.full((360), 0)
+        self.desition = 0,
+        self.hist_copy = np.full((12), 0)
 
     def get_calculate_results(self):
         print("get test results")
@@ -46,21 +49,28 @@ class Project(object):
             # Result Analysis
             angle_pred = torch.argmax(y_pred, 1)
 
-            bin_range = np.arange(self.step / 2, 360 - self.step / 2, self.step)
-            hist, bin = np.histogram(angle_pred, bin_range)
+            bin_range = np.arange((0 - self.step / 2), 360 + (self.step / 2) + 1, self.step)
 
-            decision = bin_range[np.argmax(hist)] + self.step / 2
-            self.listener.update_visualization(decision)
+            hist, bin = np.histogram(angle_pred, bin_range)
+            hist_copy = hist[0:12]
+            hist_copy[0] = hist_copy[0] + hist[12]
+
+            decision = bin_range[np.argmax(hist_copy)] + self.step / 2
+
             change_flag = True
 
             return {cfg.grid_conv_1: x_spike1[-1].tolist(),
                     cfg.grid_conv_2: x_spike2[-1].tolist(),
                     cfg.grid_conv_3: x_spike3[-1].tolist(),
                     cfg.grid_conv_4: y_pred[-1].tolist(),
+                    cfg.location: decision,
+                    cfg.locationBins: hist_copy.tolist(),
                     cfg.change_flag: change_flag}
         else:
             return {cfg.grid_conv_1: self.spiking_01[-1].tolist(),
                     cfg.grid_conv_2: self.spiking_02[-1].tolist(),
                     cfg.grid_conv_3: self.spiking_03[-1].tolist(),
                     cfg.grid_conv_4: self.y_pred[-1].tolist(),
+                    cfg.location: self.decision,
+                    cfg.locationBins: self.hist_copy.tolist(),
                     cfg.change_flag: change_flag}

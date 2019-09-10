@@ -20,3 +20,4 @@ change_flag = "changeFlag"
 
 out_prob = "outProb"
 location = "location"
+locationBins = "locationBins"

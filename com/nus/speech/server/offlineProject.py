@@ -2,6 +2,7 @@ import scipy
 import scipy.io.wavfile as wav
 import torch
 import os
+import numpy as np
 
 from com.nus.speech.server.model.sl_inference_small_batch import sMLP
 from com.nus.speech.server.model.lib import angular_distance_compute, testing
@@ -13,6 +14,7 @@ class Project(object):
 
     def __init__(self):
         print("init project")
+        self.step = 30
         self.Tsim = 10
         self.model = sMLP(self.Tsim)
         self.device = 'cpu'
@@ -51,9 +53,19 @@ class Project(object):
 
         mae = angular_distance_compute(Yte, angle_pred)
 
+        bin_range = np.arange((0 - self.step / 2), 360 + (self.step / 2) + 1, self.step)
+
+        hist, bin = np.histogram(angle_pred, bin_range)
+        hist_copy = hist[0:12]
+        hist_copy[0] = hist_copy[0] + hist[12]
+
+        decision = bin_range[np.argmax(hist_copy)] + self.step / 2
+
         return {cfg.grid_conv_1: x_spike1[-1].tolist(),
                 cfg.grid_conv_2: x_spike2[-1].tolist(),
                 cfg.grid_conv_3: x_spike3[-1].tolist(),
-                cfg.grid_conv_4: out[-1].tolist(),
+                cfg.grid_conv_4: y_pred[-1].tolist(),
+                cfg.location: decision,
+                cfg.locationBins: hist_copy.tolist(),
                 cfg.change_flag: change_flag}
 

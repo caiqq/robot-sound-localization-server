@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import scipy
 import scipy.io.wavfile as wav
+import numpy as np
 import os
 
 from com.nus.speech.server.model.lib import LinearBN1d, ZeroExpandInput, angular_distance_compute, testing
@@ -59,4 +60,16 @@ if __name__ == '__main__':
     angle_pred = torch.argmax(y_pred, 1)
 
     mae = angular_distance_compute(Yte, angle_pred)
+
+    step = 30
+    bin_range = np.arange((0 - step / 2), 360 + (step / 2) + 1, step)
+
+    hist, bin = np.histogram(angle_pred, bin_range)
+    hist_copy = hist[0:12]
+    hist_copy[0] = hist_copy[0] + hist[12]
+
+    decision = bin_range[np.argmax(hist_copy)] + step / 2
+
+    print(decision)
+    print(hist_copy)
     print("Test MAE: {}".format(mae))
