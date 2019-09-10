@@ -1,11 +1,9 @@
-import scipy.io as spio
-from sklearn.utils.extmath import softmax
-from scipy.io.wavfile import write
-
-from com.nus.speech.server.utils import state_dict_data_parallel
-from com.nus.speech.server.parseModel_torch import *
-from com.nus.speech.server.IFSim_visualization import *
-from com.nus.speech.server.model.sl_cnn import Model
+import torch
+import numpy as np
+import os
+from com.nus.speech.server.model.sl_inference_robot import sMLP, EncodeSpiking
+from com.nus.speech.server.RespeakerTrans import Listener
+from com.nus.speech.server.model.lib import angular_distance_compute, testing
 
 import com.nus.speech.server.config as cfg
 
@@ -14,201 +12,55 @@ class Project(object):
 
     def __init__(self):
         print("init project")
-        # path = 'checkpoint/sl_pytorch.pt'
-        path = './com/nus/speech/server/checkpoint/sl_pytorch.pt'
-
-        self.model = Model()
-        checkpoint = torch.load(path)
-        model_state_dict_updated = state_dict_data_parallel(checkpoint['model_state_dict'])
-        self.model.load_state_dict(model_state_dict_updated)
-
-        self.model.eval()
+        self.Tsim = 10
+        self.device = 'cpu'
+        model = sMLP(self.Tsim)
+        self.model = model.to(self.device)
+        self.listener = Listener()
+        self.encode_spiking = EncodeSpiking()
 
         print("load model")
+        abs_path = os.path.abspath(__file__).split('/')
+        self.path = ""
+        for i in range(len(abs_path) - 1):
+            self.path = self.path + abs_path[i]
+            self.path = self.path + "/"
+        print(self.path)
+        self.checkpoint = torch.load(self.path + "{0}.pt.tar".format("best"))
+        self.model.load_state_dict(self.checkpoint['model_state_dict'])  # restore the model with best_loss
+        self.step = 30
 
-        # define the network structure
-        ConvNet_layer_list = ['conv1', 'conv2', 'conv3', 'conv4', 'linear']
+        self.spiking_01 = np.full((10, 1000), 0)
+        self.spiking_02 = np.full((10, 1000), 0)
+        self.spiking_03 = np.full((10, 1000), 0)
+        self.y_pred = np.full((360), 0)
 
-        # construct the SNN simulator and perform evaluation on the test data
-        self.opts = {}
-        self.opts['dt'] = 1e-3
-        self.opts['duration'] = 10e-3
-        self.opts['threshold'] = 1.0
-        self.opts['report_every'] = 10  # results report period (# of time steps)
-
-        # parse the pretrained ANN model
-        self.Model = ParseModel(ConvNet_layer_list, self.model)
-
-        self.simulator = IFSim(self.Model, self.opts)
-
-        self.image_per_row_1 = 10
-        self.n_feature_1 = 12
-        self.size_h_1 = 19
-        self.size_w_1 = 25
-        self.margin_1 = 10
-
-        self.image_per_row_2 = 12
-        self.n_feature_2 = 24
-        self.size_h_2 = 9
-        self.size_w_2 = 12
-        self.margin_2 = 2
-
-        self.image_per_row_3 = 12
-        self.n_feature_3 = 48
-        self.size_h_3 = 4
-        self.size_w_3 = 5
-        self.margin_3 = 2
-
-        self.n_feature_4 = 96
-
-    def get_target_location(self, file_path):
-        rate = 48000
-        print("get target location")
-        mat = spio.loadmat(file_path)
-        wav, x, y = mat['wv'], mat['X'], mat['Y']  # Dim: (8192, 4) (51, 40, 6)
-        result = np.where(y[0] == 1)
-        wav1 = []
-        wav2 = []
-        wav3 = []
-        wav4 = []
-        for subWav in wav:
-            wav1.append(subWav[0])
-            wav2.append(subWav[1])
-            wav3.append(subWav[2])
-            wav4.append(subWav[3])
-        audio1 = "audio1.wav"
-        write(audio1, rate, np.array(wav1))
-        audio2 = "audio2.wav"
-        write(audio2, rate, np.array(wav2))
-        audio3 = "audio3.wav"
-        write(audio3, rate, np.array(wav3))
-        audio4 = "audio4.wav"
-        write(audio4, rate, np.array(wav4))
-        return {cfg.location: str(result[0][0]),
-                cfg.audio_files: wav.tolist()}
-
-    def get_calculate_results(self, file_path, args):
+    def get_calculate_results(self):
         print("get test results")
+        change_flag = False
+        audio_data = self.listener.get_audio_data()
+        if len(audio_data) > 0:
+            encode_spiking = self.encode_spiking.encode_robot_read(audio_data)
+            x_spike1, x_spike2, x_spike3, out, y_pred = testing(self.model, encode_spiking, self.device)
 
-        # load test data
-        mat = spio.loadmat(file_path)
-        wav, x, y = mat['wv'], mat['X'], mat['Y']  # Dim: (8192, 4) (51, 40, 6)
-        model_layers_updated, test_y, out_mem = self.simulator.test((x, y))
+            # Result Analysis
+            angle_pred = torch.argmax(y_pred, 1)
 
-        # layer_1
-        iFeature = 0
-        T = int(self.opts['duration'] / self.opts['dt'])
+            bin_range = np.arange(self.step / 2, 360 - self.step / 2, self.step)
+            hist, bin = np.histogram(angle_pred, bin_range)
 
-        iLayer = 0
-        display_grid_conv1 = np.zeros(
-            (T, self.size_h_1, self.size_w_1 * self.n_feature_1 + (self.n_feature_1 - 1) * self.margin_1))
+            decision = bin_range[np.argmax(hist)] + self.step / 2
+            self.listener.update_visualization(decision)
+            change_flag = True
 
-        display_grid_conv1_1 = np.zeros((T, self.n_feature_1, self.size_h_1, self.size_w_1))
-        for t in range(iLayer, T):
-            for iFeature in range(self.n_feature_1):
-                out = model_layers_updated[0].output_spikes[t].squeeze()
-                out_image = out[iFeature, :, :].squeeze().cpu().detach().numpy()
-                display_grid_conv1[t, 0: self.size_h_1, iFeature * self.size_w_1 + iFeature * self.margin_1: (iFeature + 1) * self.size_w_1 + iFeature * self.margin_1] = out_image
-
-                display_grid_conv1_1[t, iFeature, :, :] = out_image
-
-        # layer_2
-        n_row = self.n_feature_2 // self.image_per_row_2
-        T = int(self.opts['duration'] / self.opts['dt'])
-
-        iLayer = 1
-        # divide feature map into two rows
-        display_grid_conv2 = np.zeros(
-            (T, self.size_h_2 * n_row + self.margin_2,
-             self.size_w_2 * self.image_per_row_2 + (self.image_per_row_2 - 1) * self.margin_2))
-
-        display_grid_conv2_1 = np.zeros((T, self.n_feature_2, self.size_h_2, self.size_w_2))
-
-        for t in range(iLayer, T):
-            for iFeature in range(self.n_feature_2):
-                out = model_layers_updated[iLayer].output_spikes[t].squeeze()
-                out_image = out[iFeature, :, :].squeeze().cpu().detach().numpy()
-                iRow = iFeature // self.image_per_row_2
-                iCol = iFeature % self.image_per_row_2
-                display_grid_conv2[t, iRow * (self.size_h_2) + iRow * self.margin_2:(iRow + 1) * self.size_h_2 + iRow * self.margin_2, \
-                iCol * self.size_w_2 + iCol * self.margin_2: (iCol + 1) * self.size_w_2 + iCol * self.margin_2] = out_image
-
-                display_grid_conv2_1[t, iFeature, :, :] = out_image
-
-        # layer3
-        n_row = self.n_feature_3 // self.image_per_row_3
-
-        T = int(self.opts['duration'] / self.opts['dt'])
-        display_grid_conv3 = np.zeros(
-            (T, self.size_h_3 * n_row + self.margin_3 * (n_row - 1),
-             self.size_w_3 * self.image_per_row_3 + self.margin_3 * (self.image_per_row_3 - 1)))
-
-        display_grid_conv3_1 = np.zeros((T, self.n_feature_3, self.size_h_3, self.size_w_3))
-        iLayer = 2
-        for t in range(iLayer, T):
-            for iFeature in range(self.n_feature_3):
-                out = model_layers_updated[iLayer].output_spikes[t].squeeze()
-                out_image = out[iFeature, :, :].squeeze().cpu().detach().numpy()
-                iRow = iFeature // self.image_per_row_3
-                iCol = iFeature % self.image_per_row_3
-                display_grid_conv3[t,
-                iRow * (self.size_h_3) + iRow * self.margin_3:(iRow + 1) * self.size_h_3 + iRow * self.margin_3, \
-                iCol * self.size_w_3 + iCol * self.margin_3: (
-                                                                     iCol + 1) * self.size_w_3 + iCol * self.margin_3] = out_image
-
-                display_grid_conv3_1[t, iFeature, :, :] = out_image
-        # layer4
-
-        T = int(self.opts['duration'] / self.opts['dt'])
-        display_grid_conv4 = np.zeros((T, 12, 16))
-
-        iLayer = 3
-        for t in range(iLayer, T):
-            for iFeature in range(self.n_feature_4):
-                out = model_layers_updated[iLayer].output_spikes[t].squeeze()
-                out_image = out.view(-1).cpu().detach().numpy()
-                display_grid_conv4[t, :] = out_image.reshape(12, 16)
-
-        print("out layer")
-        # output layer
-
-        # T = int(self.opts['duration'] / self.opts['dt'])
-        # layer_act = np.zeros((T, 360))
-        # iLayer = 4
-        #
-        # for t in range(iLayer, T):
-        #     out_prob = softmax(model_layers_updated[iLayer].output_spikes[t]).squeeze()
-        #     layer_act[t, :] = out_prob
-
-        T = int(self.opts['duration'] / self.opts['dt'])
-        display_grid_out = np.zeros((T, 360))
-        max_out_list = np.zeros((T))
-
-        iLayer = 4
-        for t in range(iLayer, T):
-            out_prob = softmax(model_layers_updated[iLayer].output_spikes[t]).squeeze()
-            out_prob_1 = softmax(model_layers_updated[iLayer].output_spikes[t]).squeeze()
-            display_grid_out[t, :] = out_prob_1
-            max_out_list[t] = np.argmax(out_prob_1, axis=0)
-
-        print("conv1 shape: ", display_grid_conv1.shape)
-        print("conv1_1 shape: ", display_grid_conv1_1.shape)
-
-        return {cfg.display_grid_conv_1: display_grid_conv1.tolist(),
-                cfg.display_grid_conv_1_1: display_grid_conv1_1.tolist(),
-                cfg.display_grid_conv_2: display_grid_conv2.tolist(),
-                cfg.display_grid_conv_2_1: display_grid_conv2_1.tolist(),
-                cfg.display_grid_conv_3: display_grid_conv3.tolist(),
-                cfg.display_grid_conv_3_1: display_grid_conv3_1.tolist(),
-                cfg.display_grid_conv_4: display_grid_conv4.tolist(),
-                cfg.display_grid_out: display_grid_out.tolist(),
-                cfg.max_out_list: max_out_list.tolist(),
-                cfg.out_prob: out_prob.tolist(),
-                cfg.max_out: str(np.argmax(out_prob, axis=0))}
-
-        # return {cfg.display_grid_conv_1: display_grid_conv1_1.tolist(),
-        #         cfg.display_grid_conv_2: display_grid_conv2_1.tolist(),
-        #         cfg.display_grid_conv_3: display_grid_conv3_1.tolist(),
-        #         cfg.display_grid_conv_4: display_grid_conv4.tolist(),
-        #         cfg.out_prob: display_grid_out.tolist(),
-        #         cfg.max_out: max_out_list.tolist()}
+            return {cfg.grid_conv_1: x_spike1[-1].tolist(),
+                    cfg.grid_conv_2: x_spike2[-1].tolist(),
+                    cfg.grid_conv_3: x_spike3[-1].tolist(),
+                    cfg.grid_conv_4: y_pred[-1].tolist(),
+                    cfg.change_flag: change_flag}
+        else:
+            return {cfg.grid_conv_1: self.spiking_01[-1].tolist(),
+                    cfg.grid_conv_2: self.spiking_02[-1].tolist(),
+                    cfg.grid_conv_3: self.spiking_03[-1].tolist(),
+                    cfg.grid_conv_4: self.y_pred[-1].tolist(),
+                    cfg.change_flag: change_flag}

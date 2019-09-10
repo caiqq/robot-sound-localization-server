@@ -16,40 +16,15 @@ __status__ = 'Prototype'
 app = FlaskAPI(__name__)
 
 
-@app.route('/sound/<file_key>', methods=['GET', 'POST'])
-def sound_request(file_key):
-    print(file_key)
-
-    file_name = str(file_key) + '.mat'
-    file_path = os.path.join('Data/all', file_name)
-    abs_path = os.path.abspath(__file__).split('/')
-    path = ""
-    for i in range(len(abs_path) - 1):
-        path = path + abs_path[i]
-        path = path + "/"
-    path += file_path
+@app.route('/sound', methods=['GET', 'POST'])
+def sound_request():
+    print("get request")
     # print(path)
 
     project = pm.get_project(cfg.start_project_id)
     print("project finished")
-    args = []
-    result = project.get_calculate_results(path, args)
-    return json.dumps(result)
-
-
-@app.route('/location/<file_key>', methods=['GET', 'POST'])
-def location_request(file_key):
-    file_name = str(file_key) + '.mat'
-    file_path = os.path.join('Data/all', file_name)
-    abs_path = os.path.abspath(__file__).split('/')
-    path = ""
-    for i in range(len(abs_path) - 1):
-        path = path + abs_path[i]
-        path = path + "/"
-    path += file_path
-    # print(path)
-    project = pm.get_project(cfg.start_project_id)
-    result = project.get_target_location(path)
+    # args = []
+    result = project.get_calculate_results()
     return json.dumps(result)
 
 
